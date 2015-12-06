@@ -1248,7 +1248,7 @@ def _recursive_make_descr(datatype, newtype=bool_):
     # Is this some kind of composite a la (np.float,2)
     elif datatype.subdtype:
         mdescr = list(datatype.subdtype)
-        mdescr[0] = newtype
+        mdescr[0] = _recursive_make_descr(datatype.subdtype[0], newtype)
         return tuple(mdescr)
     else:
         return newtype
@@ -2684,6 +2684,8 @@ class MaskedArray(ndarray):
     _defaultmask = nomask
     _defaulthardmask = False
     _baseclass = ndarray
+    # Maximum number of elements per axis used when printing an array.
+    _print_width = 100
 
     def __new__(cls, data=None, mask=nomask, dtype=None, copy=False,
                 subok=True, ndmin=0, fill_value=None,
@@ -2756,13 +2758,19 @@ class MaskedArray(ndarray):
                     _data._sharedmask = True
         else:
             # Case 2. : With a mask in input.
-            # Read the mask with the current mdtype
-            try:
-                mask = np.array(mask, copy=copy, dtype=mdtype)
-            # Or assume it's a sequence of bool/int
-            except TypeError:
-                mask = np.array([tuple([m] * len(mdtype)) for m in mask],
-                                dtype=mdtype)
+            # If mask is boolean, create an array of True or False
+            if mask is True and mdtype == MaskType:
+                mask = np.ones(_data.shape, dtype=mdtype)
+            elif mask is False and mdtype == MaskType:
+                mask = np.zeros(_data.shape, dtype=mdtype)
+            else:
+                # Read the mask with the current mdtype
+                try:
+                    mask = np.array(mask, copy=copy, dtype=mdtype)
+                # Or assume it's a sequence of bool/int
+                except TypeError:
+                    mask = np.array([tuple([m] * len(mdtype)) for m in mask],
+                                    dtype=mdtype)
             # Make sure the mask and the data have the same shape
             if mask.shape != _data.shape:
                 (nd, nm) = (_data.size, mask.size)
@@ -3695,7 +3703,7 @@ class MaskedArray(ndarray):
             if m is nomask:
                 res = self._data
             else:
-                if m.shape == ():
+                if m.shape == () and m.itemsize==len(m.dtype):
                     if m.dtype.names:
                         m = m.view((bool, len(m.dtype)))
                         if m.any():
@@ -3710,8 +3718,19 @@ class MaskedArray(ndarray):
                 # convert to object array to make filled work
                 names = self.dtype.names
                 if names is None:
-                    res = self._data.astype("O")
-                    res.view(ndarray)[m] = f
+                    data = self._data
+                    mask = m
+                    # For big arrays, to avoid a costly conversion to the
+                    # object dtype, extract the corners before the conversion.
+                    for axis in range(self.ndim):
+                        if data.shape[axis] > self._print_width:
+                            ind = self._print_width // 2
+                            arr = np.split(data, (ind, -ind), axis=axis)
+                            data = np.concatenate((arr[0], arr[2]), axis=axis)
+                            arr = np.split(mask, (ind, -ind), axis=axis)
+                            mask = np.concatenate((arr[0], arr[2]), axis=axis)
+                    res = data.astype("O")
+                    res.view(ndarray)[mask] = f
                 else:
                     rdtype = _recursive_make_descr(self.dtype, "O")
                     res = self._data.astype(rdtype)
@@ -4690,7 +4709,7 @@ class MaskedArray(ndarray):
         See Also
         --------
         numpy.ma.dot : equivalent function
-    
+
         """
         return dot(self, b, out=out, strict=strict)
 
@@ -5850,6 +5869,18 @@ class mvoid(MaskedArray):
 
         """
         m = self._mask
+        if isinstance(m[indx], ndarray):
+            # Can happen when indx is a multi-dimensional field:
+            # A = ma.masked_array(data=[([0,1],)], mask=[([True,
+            #                     False],)], dtype=[("A", ">i2", (2,))])
+            # x = A[0]; y = x["A"]; then y.mask["A"].size==2
+            # and we can not say masked/unmasked.
+            # The result is no longer mvoid!
+            # See also issue #6724.
+            return masked_array(
+                data=self._data[indx], mask=m[indx],
+                fill_value=self._fill_value[indx],
+                hard_mask=self._hardmask)
         if m is not nomask and m[indx]:
             return masked
         return self._data[indx]

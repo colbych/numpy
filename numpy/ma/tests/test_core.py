@@ -191,6 +191,15 @@ class TestMaskedArray(TestCase):
         dma_3 = MaskedArray(dma_1, mask=[1, 0, 0, 0] * 6)
         fail_if_equal(dma_3.mask, dma_1.mask)
 
+        x = array([1, 2, 3], mask=True)
+        assert_equal(x._mask, [True, True, True])
+        x = array([1, 2, 3], mask=False)
+        assert_equal(x._mask, [False, False, False])
+        y = array([1, 2, 3], mask=x._mask, copy=False)
+        assert_(np.may_share_memory(x.mask, y.mask))
+        y = array([1, 2, 3], mask=x._mask, copy=True)
+        assert_(not np.may_share_memory(x.mask, y.mask))
+
     def test_creation_with_list_of_maskedarrays(self):
         # Tests creaating a masked array from alist of masked arrays.
         x = array(np.arange(5), mask=[1, 0, 0, 0, 0])
@@ -599,6 +608,13 @@ class TestMaskedArray(TestCase):
         control = np.array([(0, 1), (2, 0)], dtype=a['B'].dtype)
         assert_equal(test, control)
 
+        # test if mask gets set correctly (see #6760)
+        Z = numpy.ma.zeros(2, numpy.dtype([("A", "(2,2)i1,(2,2)i1", (2,2))]))
+        assert_equal(Z.data.dtype, numpy.dtype([('A', [('f0', 'i1', (2, 2)),
+                                          ('f1', 'i1', (2, 2))], (2, 2))]))
+        assert_equal(Z.mask.dtype, numpy.dtype([('A', [('f0', '?', (2, 2)),
+                                          ('f1', '?', (2, 2))], (2, 2))]))
+
     def test_filled_w_f_order(self):
         # Test filled w/ F-contiguous array
         a = array(np.array([(0, 1, 2), (4, 5, 6)], order='F'),
@@ -624,6 +640,18 @@ class TestMaskedArray(TestCase):
                      dtype=fancydtype)
         control = "[(--, (2, --)) (4, (--, 6.0))]"
         assert_equal(str(test), control)
+
+        # Test 0-d array with multi-dimensional dtype
+        t_2d0 = masked_array(data = (0, [[0.0, 0.0, 0.0],
+                                        [0.0, 0.0, 0.0]],
+                                    0.0),
+                             mask = (False, [[True, False, True],
+                                             [False, False, True]],
+                                     False),
+                             dtype = "int, (2,3)float, float")
+        control = "(0, [[--, 0.0, --], [0.0, 0.0, --]], 0.0)"
+        assert_equal(str(t_2d0), control)
+
 
     def test_flatten_structured_array(self):
         # Test flatten_structured_array on arrays
@@ -690,6 +718,14 @@ class TestMaskedArray(TestCase):
         self.assertTrue(f[0] is masked)
         self.assertTrue(f['a'] is masked)
         assert_equal(f[1], 4)
+
+        # exotic dtype
+        A = masked_array(data=[([0,1],)],
+                         mask=[([True, False],)],
+                         dtype=[("A", ">i2", (2,))])
+        assert_equal(A[0]["A"], A["A"][0])
+        assert_equal(A[0]["A"], masked_array(data=[0, 1],
+                         mask=[True, False], dtype=">i2"))
 
     def test_mvoid_iter(self):
         # Test iteration on __getitem__
